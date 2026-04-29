@@ -170,11 +170,20 @@ train / val / test
 {
   "derived_thread_features": {
     "threads_ratio_physical_cores": 1.0,
-    "threads_ratio_logical_cpus": 0.5,
+    "threads_ratio_logical_cpus": 1.0,
     "threads_per_socket_ratio": 2.0,
     "threads_per_numa_ratio": 2.0
   }
 }
+```
+
+说明：以上示例已经按当前容器内已确认的平台信息计算。当前可见物理核心数和逻辑 CPU 数均为 64，因此 `OMP_NUM_THREADS=64` 同时对应：
+
+```text
+threads_ratio_physical_cores = 64 / 64 = 1.0
+threads_ratio_logical_cpus   = 64 / 64 = 1.0
+threads_per_socket_ratio     = 64 / 32 = 2.0
+threads_per_numa_ratio       = 64 / 32 = 2.0
 ```
 
 这样当前实验不受 normalized action 限制，未来仍然可以分析是否有必要把动作空间转成归一化形式。
@@ -234,7 +243,7 @@ too_noisy:
 
 ------
 
-## 4. 当前必须先采集目标机器信息
+## 4. 目标机器信息与当前平台 profile
 
 在开始 PolyBench 处理之前，必须先采集目标机器 profile。原因是 OpenMP runtime 参数空间依赖于：
 
@@ -250,6 +259,45 @@ frequency / turbo / governor 状态
 ```
 
 项目第一阶段虽然只聚焦 Intel Xeon，但仍然要求使用结构化 platform profile，这也是后续扩展到 AMD、ARM/鲲鹏、SW 等平台的基础。
+
+当前已经根据 `Intel Xeon 平台信息提取汇总.md` 完成了一版平台信息汇总。后续数据集构建文档中的平台字段应以该汇总为准，而不是继续使用早期假设值。
+
+当前已确认的关键平台结论是：
+
+```text
+CPU: Intel(R) Xeon(R) Gold 6430
+ISA: x86_64
+可见 CPU: 0-63
+当前 cpuset: 0-63
+物理核心数: 64
+逻辑 CPU 数: 64
+每核心线程数: 1
+Socket 数: 2
+NUMA node 数: 2
+每 socket 核心数: 32
+每 NUMA node 核心数: 32
+NUMA node0 CPU: 0-31
+NUMA node1 CPU: 32-63
+Compiler: gcc 11.4.0
+OpenMP runtime: libgomp
+OpenMP runtime package: libgomp1:amd64 12.3.0-1ubuntu1~22.04.3
+_OPENMP: 201511
+OpenMP standard: OpenMP 4.5
+Kernel: Linux 5.4.0-216-generic
+Python: 3.10.12
+glibc: 2.35
+frequency_policy: unknown
+turbo: unknown
+```
+
+对当前 v0 的直接影响：
+
+```text
+OMP_NUM_THREADS 最大候选值先按 64 处理。
+canonical baseline 的 OMP_NUM_THREADS 先设为 64。
+不能把 96 或 128 作为当前合法线程候选，除非后续重新采集证明当前 job 可用 CPU 集合发生变化。
+正式 baseline 和 trial 必须显式设置 OMP_SCHEDULE，因为当前 OMP_DISPLAY_ENV 中默认 OMP_SCHEDULE 显示为 DYNAMIC。
+```
 
 ### 4.1 建议采集脚本
 
@@ -355,35 +403,93 @@ platform_profile_raw.tar.gz
 
 ### 4.2 需要从机器信息中提取的字段
 
-后续应整理出一个 `platform_profile.json`，至少包括：
+后续应把 `Intel Xeon 平台信息提取汇总.md` 中已确认的信息落成 `platform_profile.json`。当前 v0 建议内容如下：
 
 ```json
 {
-  "platform_id": "intel_xeon_single_machine_v0",
+  "platform_id": "intel_xeon_gold_6430_container_v0",
   "platform_label": "Intel_Xeon",
   "vendor": "Intel",
+  "vendor_id": "GenuineIntel",
   "isa": "x86_64",
-  "cpu_model": "...",
+  "cpu_model": "Intel(R) Xeon(R) Gold 6430",
   "num_sockets": 2,
   "numa_nodes": 2,
   "physical_cores": 64,
-  "logical_cpus": 128,
-  "threads_per_core": 2,
+  "logical_cpus": 64,
+  "threads_per_core": 1,
   "cores_per_socket": 32,
   "cores_per_numa_node": 32,
-  "available_cpus": "...",
+  "online_cpus": "0-63",
+  "available_cpus": "0-63",
+  "cpus_allowed_list": "0-63",
+  "numa_node_cpus": {
+    "0": "0-31",
+    "1": "32-63"
+  },
+  "numa_distance": {
+    "0_to_0": 10,
+    "0_to_1": 21,
+    "1_to_0": 21,
+    "1_to_1": 10
+  },
+  "cache": {
+    "l1d_total": "3 MiB",
+    "l1d_instances": 64,
+    "l1d_per_instance": "48 KiB",
+    "l1i_total": "2 MiB",
+    "l1i_instances": 64,
+    "l1i_per_instance": "32 KiB",
+    "l2_total": "128 MiB",
+    "l2_instances": 64,
+    "l2_per_instance": "2 MiB",
+    "l3_total": "120 MiB",
+    "l3_instances": 2,
+    "l3_per_instance": "60 MiB"
+  },
   "compiler": {
     "name": "gcc",
-    "version": "..."
+    "version": "11.4.0",
+    "package": "Ubuntu 11.4.0-1ubuntu1~22.04.3"
   },
   "openmp_runtime": {
     "name": "libgomp",
-    "version": "..."
+    "library": "/lib/x86_64-linux-gnu/libgomp.so.1",
+    "package": "libgomp1:amd64",
+    "exact_package_version": "12.3.0-1ubuntu1~22.04.3",
+    "openmp_macro": 201511,
+    "openmp_standard_from_macro": "OpenMP 4.5",
+    "omp_get_num_procs": 64,
+    "omp_get_max_threads": 64,
+    "actual_parallel_threads": 64
   },
-  "os": "linux",
-  "kernel": "...",
-  "frequency_policy": "fixed_or_unknown",
-  "turbo": "enabled_or_disabled_or_unknown"
+  "openmp_display_env_observed": {
+    "OMP_DYNAMIC": "FALSE",
+    "OMP_NUM_THREADS": "64",
+    "OMP_SCHEDULE": "DYNAMIC",
+    "OMP_PROC_BIND": "FALSE",
+    "OMP_PLACES": "",
+    "OMP_WAIT_POLICY": "PASSIVE",
+    "OMP_MAX_ACTIVE_LEVELS": "1",
+    "GOMP_CPU_AFFINITY": "",
+    "GOMP_SPINCOUNT": "300000"
+  },
+  "python": {
+    "version": "3.10.12"
+  },
+  "glibc": {
+    "version": "2.35"
+  },
+  "os": {
+    "name": "linux",
+    "kernel": "5.4.0-216-generic"
+  },
+  "frequency": {
+    "cpu_min_mhz": 800.0,
+    "cpu_max_mhz": 3400.0,
+    "frequency_policy": "unknown",
+    "turbo": "unknown"
+  }
 }
 ```
 
@@ -788,18 +894,20 @@ OMP_MAX_ACTIVE_LEVELS
 
 ### 9.1 `OMP_NUM_THREADS`
 
-具体候选值需要等机器 profile 采集后确定。
-
-假设机器为：
+当前已经根据 `Intel Xeon 平台信息提取汇总.md` 确定机器 profile。当前容器内可见并允许使用：
 
 ```text
 64 physical cores
-128 logical CPUs
+64 logical CPUs
+1 thread per core
 2 sockets
 2 NUMA nodes
+32 cores per socket
+32 cores per NUMA node
+available CPUs: 0-63
 ```
 
-可以初步使用：
+当前 v0 的 `OMP_NUM_THREADS` 候选集合先固定为：
 
 ```text
 1
@@ -810,13 +918,24 @@ OMP_MAX_ACTIVE_LEVELS
 32
 48
 64
-96
-128
 ```
 
-但如果当前 job 只允许使用部分 CPU，则不能超过当前可用 CPU 集合。
+说明：
 
-通用生成规则：
+```text
+32
+    单 socket / 单 NUMA node 的核心数。
+
+64
+    当前容器可用的全部 CPU 数，也是当前 canonical baseline 的线程数。
+
+48
+    介于单 NUMA 与全机之间的补充采样点，用于观察跨 NUMA 扩展趋势。
+```
+
+当前不把 96 或 128 放入 action space。原因是当前 `lscpu`、`taskset` 和 `Cpus_allowed_list` 都只确认 `0-63` 可用，没有可使用 96 或 128 个 CPU 的证据。
+
+如果后续换机器、换容器 cpuset 或进入 Slurm/PBS 作业环境，应重新根据新的 `available_cpus` 生成候选集合。通用生成规则为：
 
 ```text
 1
@@ -833,7 +952,13 @@ cores_per_socket
 cores_per_numa_node
 ```
 
-然后去重、排序、过滤非法值。
+然后去重、排序，并过滤：
+
+```text
+小于 1 的值
+大于当前 available CPU 数的值
+不符合当前 OpenMP runtime 约束的值
+```
 
 ------
 
@@ -891,7 +1016,7 @@ OMP_MAX_ACTIVE_LEVELS 固定为 1。
 建议 baseline：
 
 ```bash
-export OMP_NUM_THREADS=<physical_cores_or_available_cores>
+export OMP_NUM_THREADS=64
 export OMP_PROC_BIND=close
 export OMP_PLACES=cores
 export OMP_SCHEDULE=static
@@ -900,7 +1025,7 @@ export OMP_WAIT_POLICY=PASSIVE
 export OMP_MAX_ACTIVE_LEVELS=1
 ```
 
-如果当前进程受 cpuset / Slurm 限制，则 `<physical_cores_or_available_cores>` 应该使用当前 job 可用 CPU 数，而不是整机物理核心数。
+这个 baseline 是根据当前已确认的 `available_cpus = 0-63` materialize 出来的。如果后续当前进程受新的 cpuset / Slurm / PBS 限制，则 `OMP_NUM_THREADS` 应该重新使用当前 job 可用 CPU 数，而不是整机物理核心数或旧文档里的固定值。
 
 ------
 
@@ -1084,35 +1209,93 @@ polybench_trials_raw.jsonl
 
 ### 14.1 `platform_profile.json`
 
-示例：
+当前 v0 建议直接使用已确认的平台字段：
 
 ```json
 {
-  "platform_id": "intel_xeon_single_machine_v0",
+  "platform_id": "intel_xeon_gold_6430_container_v0",
   "platform_label": "Intel_Xeon",
   "vendor": "Intel",
+  "vendor_id": "GenuineIntel",
   "isa": "x86_64",
-  "cpu_model": "...",
+  "cpu_model": "Intel(R) Xeon(R) Gold 6430",
   "num_sockets": 2,
   "numa_nodes": 2,
   "physical_cores": 64,
-  "logical_cpus": 128,
-  "threads_per_core": 2,
+  "logical_cpus": 64,
+  "threads_per_core": 1,
   "cores_per_socket": 32,
   "cores_per_numa_node": 32,
-  "available_cpus": "0-127",
+  "online_cpus": "0-63",
+  "available_cpus": "0-63",
+  "cpus_allowed_list": "0-63",
+  "numa_node_cpus": {
+    "0": "0-31",
+    "1": "32-63"
+  },
+  "numa_distance": {
+    "0_to_0": 10,
+    "0_to_1": 21,
+    "1_to_0": 21,
+    "1_to_1": 10
+  },
+  "cache": {
+    "l1d_total": "3 MiB",
+    "l1d_instances": 64,
+    "l1d_per_instance": "48 KiB",
+    "l1i_total": "2 MiB",
+    "l1i_instances": 64,
+    "l1i_per_instance": "32 KiB",
+    "l2_total": "128 MiB",
+    "l2_instances": 64,
+    "l2_per_instance": "2 MiB",
+    "l3_total": "120 MiB",
+    "l3_instances": 2,
+    "l3_per_instance": "60 MiB"
+  },
   "compiler": {
     "name": "gcc",
-    "version": "..."
+    "version": "11.4.0",
+    "package": "Ubuntu 11.4.0-1ubuntu1~22.04.3"
   },
   "openmp_runtime": {
     "name": "libgomp",
-    "version": "..."
+    "library": "/lib/x86_64-linux-gnu/libgomp.so.1",
+    "package": "libgomp1:amd64",
+    "exact_package_version": "12.3.0-1ubuntu1~22.04.3",
+    "openmp_macro": 201511,
+    "openmp_standard_from_macro": "OpenMP 4.5",
+    "omp_get_num_procs": 64,
+    "omp_get_max_threads": 64,
+    "actual_parallel_threads": 64
   },
-  "os": "linux",
-  "kernel": "...",
-  "frequency_policy": "unknown",
-  "turbo": "unknown"
+  "openmp_display_env_observed": {
+    "OMP_DYNAMIC": "FALSE",
+    "OMP_NUM_THREADS": "64",
+    "OMP_SCHEDULE": "DYNAMIC",
+    "OMP_PROC_BIND": "FALSE",
+    "OMP_PLACES": "",
+    "OMP_WAIT_POLICY": "PASSIVE",
+    "OMP_MAX_ACTIVE_LEVELS": "1",
+    "GOMP_CPU_AFFINITY": "",
+    "GOMP_SPINCOUNT": "300000"
+  },
+  "python": {
+    "version": "3.10.12"
+  },
+  "glibc": {
+    "version": "2.35"
+  },
+  "os": {
+    "name": "linux",
+    "kernel": "5.4.0-216-generic"
+  },
+  "frequency": {
+    "cpu_min_mhz": 800.0,
+    "cpu_max_mhz": 3400.0,
+    "frequency_policy": "unknown",
+    "turbo": "unknown"
+  }
 }
 ```
 
@@ -1179,14 +1362,14 @@ polybench_trials_raw.jsonl
 {
   "trial_id": "polybench_trial_000001",
   "dataset_version": "polybench_omp_runtime_v0",
-  "timestamp": "2026-04-29T12:00:00-07:00",
+  "timestamp": "2026-04-29T12:00:00+08:00",
   "program_id": "polybench_gemm_omp_v0",
   "program_family": "polybench_gemm",
   "kernel_name": "gemm",
   "split": "unassigned",
   "input_id": "large",
   "dataset_macro": "LARGE_DATASET",
-  "platform_id": "intel_xeon_single_machine_v0",
+  "platform_id": "intel_xeon_gold_6430_container_v0",
   "action_id": "action_000001",
   "absolute_action": {
     "OMP_NUM_THREADS": "64",
@@ -1199,7 +1382,7 @@ polybench_trials_raw.jsonl
   },
   "derived_thread_features": {
     "threads_ratio_physical_cores": 1.0,
-    "threads_ratio_logical_cpus": 0.5,
+    "threads_ratio_logical_cpus": 1.0,
     "threads_per_socket_ratio": 2.0,
     "threads_per_numa_ratio": 2.0
   },
@@ -1437,7 +1620,7 @@ chosen.reward - rejected.reward >= margin
     "OMP_MAX_ACTIVE_LEVELS": "1"
   },
   "rejected": {
-    "OMP_NUM_THREADS": "128",
+    "OMP_NUM_THREADS": "1",
     "OMP_PROC_BIND": "false",
     "OMP_PLACES": "threads",
     "OMP_SCHEDULE": "dynamic,1",
@@ -1512,7 +1695,9 @@ test:  5 kernels
 
 ```text
 Step 0:
-    采集目标机器 platform profile。
+    基于 Intel Xeon 平台信息提取汇总.md 落成 platform_profile.json。
+    当前关键字段已确认：64 physical cores、64 logical CPUs、available_cpus=0-63、libgomp、gcc 11.4.0。
+    如正式 trial 前需要补齐 env / governor / turbo，只执行只读采集命令。
 
 Step 1:
     固定 PolyBench/C 版本。
@@ -1543,7 +1728,8 @@ Step 7:
 
 Step 8:
     确定 absolute OpenMP action space。
-    其中 OMP_NUM_THREADS 根据机器 profile 生成。
+    当前 OMP_NUM_THREADS 固定候选为：1, 2, 4, 8, 16, 32, 48, 64。
+    canonical baseline 固定为 OMP_NUM_THREADS=64、OMP_PROC_BIND=close、OMP_PLACES=cores、OMP_SCHEDULE=static、OMP_DYNAMIC=FALSE、OMP_WAIT_POLICY=PASSIVE、OMP_MAX_ACTIVE_LEVELS=1。
 
 Step 9:
     运行 Round 0 sanity trials。
@@ -1654,18 +1840,20 @@ PolyBench/C → controlled OpenMP workload → action trial dataset
 形成后续 SFT / DPO / RL 训练与评估所需的 raw trial dataset。
 ```
 
-当前最先要做的具体动作是：
+当前已经完成初始 platform profile 采集与汇总，因此下一步具体动作是：
 
 ```text
-先采集目标机器 platform profile。
+1. 把已确认平台信息落成 platform_profile.json。
+2. 固定 absolute action space，当前 OMP_NUM_THREADS 候选为 1/2/4/8/16/32/48/64。
+3. 登记 30 个 PolyBench/C kernel，生成 polybench_programs_raw.jsonl。
+4. 复制 PolyBench/C 原始源码到工作目录，后续只在 kernel_* 函数内部做 OpenMP annotation。
 ```
 
-然后再决定：
+随后推进：
 
 ```text
-OMP_NUM_THREADS 候选集合
-baseline 定义
 action sampling 范围
 PolyBench input size
+Round 0 sanity trial
 正式 trial collection 规模
 ```
